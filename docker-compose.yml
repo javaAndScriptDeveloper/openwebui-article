@@ -1,0 +1,55 @@
+# Open WebUI for a small team — companion compose + API client
+#
+# Usage:
+#   cp .env.example .env   # set WEBUI_SECRET_KEY (openssl rand -hex 32)
+#   docker compose up -d   # UI on http://localhost:3000
+#
+# First account you create becomes admin. After that, sign-ups sit in
+# "pending" until an admin approves them (DEFAULT_USER_ROLE=pending).
+#
+# Ollama is optional. If you run models elsewhere (an OpenAI-compatible
+# endpoint, vLLM, LiteLLM), drop the ollama service and set
+# OPENAI_API_BASE_URL / OPENAI_API_KEY instead — Open WebUI is not tied
+# to Ollama.
+
+services:
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    ports:
+      - "3000:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # reach Ollama on the host
+    volumes:
+      - open-webui:/app/backend/data          # SQLite db, uploads, vector store
+    environment:
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:?set it in .env — signs JWTs and encrypts data at rest}
+      - ENABLE_API_KEYS=${ENABLE_API_KEYS:-true}     # off by default; we need it for client/
+      - DEFAULT_USER_ROLE=${DEFAULT_USER_ROLE:-pending}
+      # OpenAI-compatible backend instead of / in addition to Ollama:
+      # - OPENAI_API_BASE_URL=https://your-vllm-or-litellm/v1
+      # - OPENAI_API_KEY=...
+      # Production notes (see the article):
+      # - THREAD_POOL_SIZE default (40) is far too low for real load — docs suggest 2000+.
+      # - Multi-replica requires PostgreSQL (DATABASE_URL), Redis (REDIS_URL),
+      #   and a client-server vector DB (VECTOR_DB=pgvector) — embedded chroma/SQLite
+      #   are single-writer and will break replicas.
+    restart: unless-stopped
+
+  # Optional: local models via Ollama on the same box.
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama:/root/.ollama
+    # Uncomment on NVIDIA hosts:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  open-webui:
+  ollama:
