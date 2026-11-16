@@ -1,43 +1,57 @@
-# Open WebUI for a small team — companion compose + API client
+# Open WebUI for a small team: companion compose + API client
 #
 # Usage:
 #   cp .env.example .env   # set WEBUI_SECRET_KEY (openssl rand -hex 32)
-#   docker compose up -d   # UI on http://localhost:3000
+#   docker compose up -d   # UI on http://127.0.0.1:3000
 #
 # First account you create becomes admin. After that, sign-ups sit in
 # "pending" until an admin approves them (DEFAULT_USER_ROLE=pending).
 #
-# Ollama is optional. If you run models elsewhere (an OpenAI-compatible
-# endpoint, vLLM, LiteLLM), drop the ollama service and set
-# OPENAI_API_BASE_URL / OPENAI_API_KEY instead — Open WebUI is not tied
-# to Ollama.
+# Models: the bundled ollama service below is wired in via OLLAMA_BASE_URL.
+# If you run models elsewhere (an OpenAI-compatible endpoint, vLLM, LiteLLM),
+# drop the ollama service (and depends_on) and set OPENAI_API_BASE_URL / OPENAI_API_KEY instead.
+# Open WebUI is not tied to Ollama. To use an Ollama already running on the
+# Docker host, set OLLAMA_BASE_URL=http://host.docker.internal:11434 in .env.
+#
+# NOTE: several settings below (ENABLE_API_KEYS, DEFAULT_USER_ROLE, ...) are
+# "persistent config" in Open WebUI: the environment value seeds the database on
+# first boot, and after that the Admin UI value wins unless you set
+# ENABLE_PERSISTENT_CONFIG=false.
 
 services:
   open-webui:
-    image: ghcr.io/open-webui/open-webui:main
+    # Pin a release instead of the rolling :main tag. Bump it deliberately:
+    # upgrades run database migrations on startup.
+    image: ghcr.io/open-webui/open-webui:${OPEN_WEBUI_VERSION:-v0.13.3}
+    depends_on:
+      - ollama
     ports:
-      - "3000:8080"
+      # Loopback only. Put a TLS-terminating reverse proxy in front for the team,
+      # or set OPEN_WEBUI_BIND=0.0.0.0 on a network you control.
+      - "${OPEN_WEBUI_BIND:-127.0.0.1}:3000:8080"
     extra_hosts:
-      - "host.docker.internal:host-gateway"   # reach Ollama on the host
+      - "host.docker.internal:host-gateway"   # only needed for an Ollama on the host
     volumes:
       - open-webui:/app/backend/data          # SQLite db, uploads, vector store
     environment:
-      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:?set it in .env — signs JWTs and encrypts data at rest}
-      - ENABLE_API_KEYS=${ENABLE_API_KEYS:-true}     # off by default; we need it for client/
-      - DEFAULT_USER_ROLE=${DEFAULT_USER_ROLE:-pending}
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:?set it in .env (signs JWTs, encrypts data at rest)}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
+      - ENABLE_API_KEYS=${ENABLE_API_KEYS:-true}     # off by default; client/ needs it
+      - DEFAULT_USER_ROLE=${DEFAULT_USER_ROLE:-pending}  # already the default; explicit on purpose
       # OpenAI-compatible backend instead of / in addition to Ollama:
       # - OPENAI_API_BASE_URL=https://your-vllm-or-litellm/v1
-      # - OPENAI_API_KEY=...
+      # - OPENAI_API_KEY=${OPENAI_API_KEY}   # keep the value in .env, not here
       # Production notes (see the article):
-      # - THREAD_POOL_SIZE default (40) is far too low for real load — docs suggest 2000+.
-      # - Multi-replica requires PostgreSQL (DATABASE_URL), Redis (REDIS_URL),
-      #   and a client-server vector DB (VECTOR_DB=pgvector) — embedded chroma/SQLite
-      #   are single-writer and will break replicas.
+      # - THREAD_POOL_SIZE is unset by default (limit of 40); the docs call that far
+      #   too low for a real multi-user server and suggest 2000 or more.
+      # - Multi-replica requires PostgreSQL (DATABASE_URL), Redis (REDIS_URL,
+      #   WEBSOCKET_MANAGER=redis) and a client-server vector DB (VECTOR_DB=pgvector).
+      #   The embedded Chroma/SQLite store is single-writer.
     restart: unless-stopped
 
   # Optional: local models via Ollama on the same box.
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:${OLLAMA_VERSION:-latest}   # pin OLLAMA_VERSION in .env for reproducibility
     volumes:
       - ollama:/root/.ollama
     # Uncomment on NVIDIA hosts:
